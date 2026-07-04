@@ -115,7 +115,13 @@ function buildShim(baseUrl) {
   // Rewrites URLs used by dynamic fetch()/XHR calls at runtime (this is
   // what makes JS-driven players like hls.js work, since they build segment
   // URLs on the fly rather than putting them in the initial HTML).
-  return `<script>
+  // Force a permissive referrer policy so the browser always sends the full
+  // /proxy?url=<page> referer (including the query) on sub-resource requests.
+  // originatingPageFromReferer relies on that query to recover the embedding
+  // page for hotlink allowlists; a stricter upstream/Discord policy would
+  // otherwise trim the referer to just the origin and break it.
+  return `<meta name="referrer" content="unsafe-url">
+<script>
 (function () {
   var REAL_ORIGIN = ${JSON.stringify(baseUrl)};
   function toProxied(url) {
