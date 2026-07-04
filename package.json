@@ -1,0 +1,21 @@
+{
+  "name": "discord-video-activity",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Discord Activity that embeds a video player, launchable from a voice channel via a slash command.",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node server.js",
+    "bot": "node bot.js",
+    "deploy-commands": "node deploy-commands.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2"
+  }
+}
