@@ -85,9 +85,10 @@ html, body {
   background: #000;
   display: block;
 }
-/* Fill the entire viewport with the video, cropping any overflow rather than
-   leaving black bars (pillar/letterbox). Keeps aspect ratio, no distortion. */
-#video { object-fit: cover; }
+/* Preserve the video's aspect ratio (no skew, no crop) and scale it to fill
+   the viewport as much as possible: it fills the height and only leaves
+   pillarbars on the left/right when the screen is wider than the video. */
+#video { object-fit: contain; }
 #legacy { display: none; }
 #app.legacy #video { display: none; }
 #app.legacy #legacy { display: block; }
