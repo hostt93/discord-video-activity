@@ -392,39 +392,63 @@ document.addEventListener('click', (e) => {
   if (!qualityWrap.contains(e.target)) qualityMenu.classList.add('hidden');
 });
 
-/* fullscreen — real Fullscreen API where allowed, CSS fill-viewport fallback
-   inside Discord's activity iframe (which blocks fullscreen via permissions
-   policy). */
-function inRealFs() { return document.fullscreenElement || document.webkitFullscreenElement; }
+/* fullscreen — try the real Fullscreen API on the app container, then on the
+   video element, then native video fullscreen; only if all are blocked do we
+   fall back to a CSS fill-the-frame. Discord activity iframes normally
+   delegate the fullscreen permission, so the real API should work. */
+function inRealFs() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || video.webkitDisplayingFullscreen);
+}
 function isFs() { return inRealFs() || app.classList.contains('pseudo-fs'); }
 function setFsIcon() { fsBtn.innerHTML = isFs() ? ICONS.exitFs : ICONS.enterFs; }
 
-function toggleFullscreen() {
-  if (inRealFs()) {
+function reqFsOn(el) {
+  const fn = el && (el.requestFullscreen || el.webkitRequestFullscreen ||
+    el.mozRequestFullScreen || el.msRequestFullscreen);
+  if (!fn) return Promise.reject(new Error('no requestFullscreen'));
+  try { return Promise.resolve(fn.call(el)); } catch (e) { return Promise.reject(e); }
+}
+
+function enterFullscreen() {
+  reqFsOn(app)
+    .then(setFsIcon)
+    .catch(() => reqFsOn(video).then(setFsIcon))
+    .catch(() => {
+      // Native video fullscreen — allowed on some clients even when the
+      // document Fullscreen API is policy-blocked.
+      if (video.webkitEnterFullscreen && video.readyState > 0) {
+        try { video.webkitEnterFullscreen(); setFsIcon(); return; } catch (e) {}
+      }
+      console.warn(
+        'Real fullscreen unavailable (document.fullscreenEnabled=' +
+          document.fullscreenEnabled + ') — using CSS fill-frame fallback.'
+      );
+      app.classList.add('pseudo-fs');
+      setFsIcon();
+    });
+}
+
+function exitFullscreen() {
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
     const exit = document.exitFullscreen || document.webkitExitFullscreen;
     if (exit) exit.call(document);
-    return;
-  }
-  if (app.classList.contains('pseudo-fs')) {
+  } else if (video.webkitDisplayingFullscreen && video.webkitExitFullscreen) {
+    video.webkitExitFullscreen();
+  } else {
     app.classList.remove('pseudo-fs');
-    setFsIcon();
-    return;
   }
-  const el = app;
-  const req = el.requestFullscreen || el.webkitRequestFullscreen;
-  let attempt;
-  try { attempt = req ? req.call(el) : Promise.reject(new Error('no fullscreen api')); }
-  catch (e) { attempt = Promise.reject(e); }
-  Promise.resolve(attempt).then(setFsIcon).catch(() => {
-    // Blocked (e.g. Discord permissions policy) — maximise within the iframe.
-    app.classList.add('pseudo-fs');
-    setFsIcon();
-  });
+  setFsIcon();
+}
+
+function toggleFullscreen() {
+  if (isFs()) exitFullscreen(); else enterFullscreen();
 }
 
 fsBtn.onclick = toggleFullscreen;
 document.addEventListener('fullscreenchange', setFsIcon);
 document.addEventListener('webkitfullscreenchange', setFsIcon);
+video.addEventListener('webkitbeginfullscreen', setFsIcon);
+video.addEventListener('webkitendfullscreen', setFsIcon);
 
 /* auto-hide UI */
 let hideTimer = null;
