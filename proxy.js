@@ -50,8 +50,15 @@ async function assertSafeUrl(targetUrl) {
   }
 }
 
-function proxiedUrl(absoluteUrl) {
-  return `/proxy?url=${encodeURIComponent(absoluteUrl)}`;
+// `ref` is the embedding-page URL that hotlink checks upstream want to see as
+// the Referer. When present we carry it forward on every rewritten sub-URL so
+// the whole resource tree (playlist -> variants -> segments) keeps the same
+// referer context, instead of relying on the browser's own Referer header
+// (which Discord's sandbox may strip).
+function proxiedUrl(absoluteUrl, ref) {
+  let out = `/proxy?url=${encodeURIComponent(absoluteUrl)}`;
+  if (ref) out += `&ref=${encodeURIComponent(ref)}`;
+  return out;
 }
 
 // When a proxied page requests a sub-resource (CSS, JS, an HLS manifest, a
@@ -84,16 +91,16 @@ function resolve(maybeRelative, base) {
   }
 }
 
-function rewriteCss(css, baseUrl) {
+function rewriteCss(css, baseUrl, ref) {
   return css.replace(/url\(([^)]+)\)/g, (match, rawUrl) => {
     const url = rawUrl.trim().replace(/^['"]|['"]$/g, '');
     if (!url || url.startsWith('data:')) return match;
     const abs = resolve(url, baseUrl);
-    return abs ? `url("${proxiedUrl(abs)}")` : match;
+    return abs ? `url("${proxiedUrl(abs, ref)}")` : match;
   });
 }
 
-function rewriteM3u8(text, baseUrl) {
+function rewriteM3u8(text, baseUrl, ref) {
   return text
     .split('\n')
     .map((line) => {
@@ -102,16 +109,16 @@ function rewriteM3u8(text, baseUrl) {
       if (trimmed.startsWith('#')) {
         return trimmed.replace(/URI="([^"]+)"/, (m, uri) => {
           const abs = resolve(uri, baseUrl);
-          return abs ? `URI="${proxiedUrl(abs)}"` : m;
+          return abs ? `URI="${proxiedUrl(abs, ref)}"` : m;
         });
       }
       const abs = resolve(trimmed, baseUrl);
-      return abs ? proxiedUrl(abs) : line;
+      return abs ? proxiedUrl(abs, ref) : line;
     })
     .join('\n');
 }
 
-function buildShim(baseUrl) {
+function buildShim(baseUrl, ref) {
   // Rewrites URLs used by dynamic fetch()/XHR calls at runtime (this is
   // what makes JS-driven players like hls.js work, since they build segment
   // URLs on the fly rather than putting them in the initial HTML).
@@ -124,11 +131,14 @@ function buildShim(baseUrl) {
 <script>
 (function () {
   var REAL_ORIGIN = ${JSON.stringify(baseUrl)};
+  var REF = ${JSON.stringify(ref || '')};
   function toProxied(url) {
     try {
       var abs = new URL(url, REAL_ORIGIN).href;
       if (abs.indexOf(location.origin) === 0) return url;
-      return '/proxy?url=' + encodeURIComponent(abs);
+      var out = '/proxy?url=' + encodeURIComponent(abs);
+      if (REF) out += '&ref=' + encodeURIComponent(REF);
+      return out;
     } catch (e) { return url; }
   }
   var origFetch = window.fetch;
@@ -150,7 +160,7 @@ function buildShim(baseUrl) {
 </script>`;
 }
 
-function rewriteHtml(html, baseUrl) {
+function rewriteHtml(html, baseUrl, ref) {
   const $ = cheerio.load(html);
 
   const attrTargets = [
@@ -178,7 +188,7 @@ function rewriteHtml(html, baseUrl) {
             const [url, size] = part.trim().split(/\s+/, 2);
             const abs = resolve(url, baseUrl);
             if (!abs) return part.trim();
-            return size ? `${proxiedUrl(abs)} ${size}` : proxiedUrl(abs);
+            return size ? `${proxiedUrl(abs, ref)} ${size}` : proxiedUrl(abs, ref);
           })
           .join(', ');
         $el.attr(attr, rewritten);
@@ -187,20 +197,20 @@ function rewriteHtml(html, baseUrl) {
 
       if (/^(javascript:|data:|#|mailto:)/.test(val)) return;
       const abs = resolve(val, baseUrl);
-      if (abs) $el.attr(attr, proxiedUrl(abs));
+      if (abs) $el.attr(attr, proxiedUrl(abs, ref));
     });
   }
 
   $('style').each((_, el) => {
     const $el = $(el);
-    $el.text(rewriteCss($el.text(), baseUrl));
+    $el.text(rewriteCss($el.text(), baseUrl, ref));
   });
   $('[style]').each((_, el) => {
     const $el = $(el);
-    $el.attr('style', rewriteCss($el.attr('style'), baseUrl));
+    $el.attr('style', rewriteCss($el.attr('style'), baseUrl, ref));
   });
 
-  const shim = buildShim(baseUrl);
+  const shim = buildShim(baseUrl, ref);
   if ($('head').length) $('head').prepend(shim);
   else $.root().prepend(shim);
 
@@ -233,11 +243,15 @@ async function handleProxy(req, res) {
 
   const targetOrigin = new URL(target).origin;
 
-  // Prefer the real embedding page (recovered from the incoming referer) so
-  // hotlink allowlists that require the *site's* referer — not the resource's
-  // own origin — are satisfied. Fall back to the target's own origin for
-  // top-level loads, which satisfies simpler same-origin referer checks.
-  const originatingPage = originatingPageFromReferer(req);
+  // Prefer an explicit ?ref= (the embedding page passed by our own player /
+  // rewritten sub-URLs), then fall back to recovering it from the incoming
+  // Referer, then to the target's own origin. hotlink allowlists that require
+  // the *site's* referer — not the resource's own origin — need this.
+  const explicitRef =
+    typeof req.query.ref === 'string' && /^https?:\/\//i.test(req.query.ref)
+      ? req.query.ref
+      : null;
+  const originatingPage = explicitRef || originatingPageFromReferer(req);
   let refererValue = `${targetOrigin}/`;
   let originValue = targetOrigin;
   if (originatingPage) {
@@ -287,10 +301,10 @@ async function handleProxy(req, res) {
   if (isHtml || isCss || isM3u8) {
     const text = await upstream.text();
     const rewritten = isHtml
-      ? rewriteHtml(text, finalUrl)
+      ? rewriteHtml(text, finalUrl, originatingPage)
       : isCss
-      ? rewriteCss(text, finalUrl)
-      : rewriteM3u8(text, finalUrl);
+      ? rewriteCss(text, finalUrl, originatingPage)
+      : rewriteM3u8(text, finalUrl, originatingPage);
     res.send(rewritten);
     return;
   }
@@ -302,4 +316,79 @@ async function handleProxy(req, res) {
   }
 }
 
-module.exports = { handleProxy };
+// Fetches an embed page server-side (with browser-like headers, since many
+// players only emit their stream URL when they think a real browser asked)
+// and scrapes it for a playable media URL — an HLS manifest (.m3u8) or a
+// progressive file (.mp4/.webm). Returns { media, ref } where `ref` is the
+// page URL to forward as the Referer when playing, or null if nothing found.
+async function resolveMedia(pageUrl) {
+  await assertSafeUrl(pageUrl);
+  const pageOrigin = new URL(pageUrl).origin;
+  const res = await fetch(pageUrl, {
+    headers: {
+      'user-agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      referer: `${pageOrigin}/`,
+      origin: pageOrigin,
+    },
+    redirect: 'follow',
+  });
+  const finalUrl = res.url || pageUrl;
+  const contentType = res.headers.get('content-type') || '';
+
+  // If the pasted URL *is* the media, just use it directly.
+  if (
+    contentType.includes('mpegurl') ||
+    finalUrl.split('?')[0].endsWith('.m3u8') ||
+    contentType.includes('video/mp4') ||
+    finalUrl.split('?')[0].endsWith('.mp4')
+  ) {
+    return { media: finalUrl, ref: pageOrigin + '/' };
+  }
+
+  if (!contentType.includes('text/html') && !contentType.includes('javascript') && !contentType.includes('json')) {
+    return null;
+  }
+
+  const body = await res.text();
+  // Look for absolute or root-relative media URLs anywhere in the markup/JS.
+  const patterns = [
+    /https?:\\?\/\\?\/[^\s"'`<>]+?\.m3u8[^\s"'`<>]*/gi,
+    /https?:\\?\/\\?\/[^\s"'`<>]+?\.mp4[^\s"'`<>]*/gi,
+  ];
+  const found = [];
+  for (const re of patterns) {
+    const matches = body.match(re) || [];
+    for (let m of matches) {
+      m = m.replace(/\\\//g, '/'); // unescape JSON-escaped slashes
+      if (!found.includes(m)) found.push(m);
+    }
+  }
+  if (found.length === 0) return null;
+
+  // Prefer an HLS manifest (gives us quality levels) over a flat mp4.
+  const m3u8 = found.find((u) => u.split('?')[0].toLowerCase().endsWith('.m3u8'));
+  const media = m3u8 || found[0];
+  return { media, ref: finalUrl };
+}
+
+async function handleResolve(req, res) {
+  const target = req.query.url;
+  if (!target) {
+    res.status(400).json({ error: 'Missing "url" query parameter' });
+    return;
+  }
+  try {
+    const result = await resolveMedia(target);
+    if (!result) {
+      res.json({ media: null });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+}
+
+module.exports = { handleProxy, handleResolve, resolveMedia };

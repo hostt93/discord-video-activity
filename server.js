@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const { handleProxy } = require('./proxy');
+const { handleProxy, handleResolve } = require('./proxy');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +21,10 @@ app.use((req, res, next) => {
 app.get('/config', (req, res) => {
   res.json({ clientId: process.env.DISCORD_CLIENT_ID || '' });
 });
+
+// Given a pasted embed page, scrape out its playable media URL so the custom
+// player can load it directly (instead of embedding the site's own player).
+app.get('/resolve', handleResolve);
 
 // Captures the raw body for any content type so non-GET requests made by
 // proxied pages (form posts, XHR bodies) can be forwarded upstream as-is.

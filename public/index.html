@@ -4,61 +4,78 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Video Player Activity</title>
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      background: #000;
-      overflow: hidden;
-      font-family: system-ui, sans-serif;
-    }
-    #bar {
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      z-index: 10;
-      display: flex;
-      gap: 6px;
-      padding: 8px;
-      background: rgba(0, 0, 0, 0.75);
-    }
-    #url-input {
-      flex: 1;
-      padding: 8px 10px;
-      border-radius: 6px;
-      border: 1px solid #444;
-      background: #111;
-      color: #eee;
-      font-size: 14px;
-    }
-    #load-btn {
-      padding: 8px 14px;
-      border-radius: 6px;
-      border: 0;
-      background: #5865f2;
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    #load-btn:hover {
-      background: #4752c4;
-    }
-    #player {
-      border: 0;
-      width: 100vw;
-      height: 100vh;
-      display: block;
-      background: #000;
-    }
-  </style>
+  <link rel="stylesheet" href="/player.css" />
 </head>
 <body>
-  <div id="bar">
-    <input id="url-input" type="text" placeholder="Paste an embed link or <iframe> code here, then press Load" />
-    <button id="load-btn">Load</button>
+  <div id="app" class="idle">
+    <!-- Paste bar (auto-hides with the controls once something is playing) -->
+    <div id="topbar">
+      <div id="yt-logo" title="Video Player">
+        <svg viewBox="0 0 90 20" height="20" aria-hidden="true">
+          <path d="M27.97 3.13A3.6 3.6 0 0 0 25.43.6C23.2 0 14.25 0 14.25 0S5.3 0 3.07.6A3.6 3.6 0 0 0 .53 3.13C0 5.37 0 10 0 10s0 4.63.53 6.87a3.6 3.6 0 0 0 2.54 2.53C5.3 20 14.25 20 14.25 20s8.95 0 11.18-.6a3.6 3.6 0 0 0 2.54-2.53C28.5 14.63 28.5 10 28.5 10s0-4.63-.53-6.87z" fill="#FF0000"/>
+          <path d="M11.4 14.29L18.83 10 11.4 5.71v8.58z" fill="#fff"/>
+          <text x="33" y="15" fill="#fff" font-family="Roboto, Arial, sans-serif" font-size="14" font-weight="700">Player</text>
+        </svg>
+      </div>
+      <input id="url-input" type="text" spellcheck="false"
+             placeholder="Paste an embed link or <iframe> code, then press Load" />
+      <button id="load-btn">Load</button>
+    </div>
+
+    <!-- The video stage -->
+    <div id="stage">
+      <video id="video" playsinline></video>
+      <!-- Fallback for embeds we cannot resolve to a direct stream -->
+      <iframe id="legacy" allowfullscreen="true" frameborder="0" scrolling="1"></iframe>
+
+      <div id="spinner" class="hidden"><div class="ring"></div></div>
+
+      <button id="big-play" class="hidden" aria-label="Play">
+        <svg viewBox="0 0 68 48"><path class="bg" d="M66.5 7.7a8 8 0 0 0-5.5-5.5C55.9 1 34 1 34 1s-21.9 0-27 1.2A8 8 0 0 0 1.5 7.7 84 84 0 0 0 .3 24a84 84 0 0 0 1.2 16.3 8 8 0 0 0 5.5 5.5C12.1 47 34 47 34 47s21.9 0 27-1.2a8 8 0 0 0 5.5-5.5A84 84 0 0 0 67.7 24a84 84 0 0 0-1.2-16.3z"/><path d="M27 34l18-10-18-10v20z" fill="#fff"/></svg>
+      </button>
+
+      <div id="error-msg" class="hidden"></div>
+
+      <!-- Custom YouTube-style control bar -->
+      <div id="controls" class="hidden">
+        <div id="seek">
+          <div id="seek-hitbox"></div>
+          <div id="seek-bar">
+            <div id="buffered"></div>
+            <div id="played"></div>
+            <div id="scrubber"></div>
+          </div>
+        </div>
+
+        <div id="btn-row">
+          <div class="left">
+            <button id="play" class="ctl" aria-label="Play/Pause"></button>
+            <button id="stop" class="ctl" aria-label="Stop" title="Stop">
+              <svg viewBox="0 0 36 36"><rect x="11" y="11" width="14" height="14" rx="1" fill="#fff"/></svg>
+            </button>
+            <div id="vol">
+              <button id="mute" class="ctl" aria-label="Mute"></button>
+              <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+            </div>
+            <span id="time"><span id="cur">0:00</span> / <span id="dur">0:00</span></span>
+            <span id="live-badge" class="hidden">● LIVE</span>
+          </div>
+          <div class="right">
+            <div id="quality-wrap">
+              <button id="quality-btn" class="ctl" aria-label="Quality" title="Quality">
+                <svg viewBox="0 0 36 36"><path fill="#fff" d="M18 22.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zm9.4-3l2.1-1.6a.5.5 0 0 0 .1-.6l-2-3.4a.5.5 0 0 0-.6-.2l-2.5 1a7.7 7.7 0 0 0-1.7-1l-.4-2.6a.5.5 0 0 0-.5-.4h-4a.5.5 0 0 0-.5.4l-.4 2.6c-.6.2-1.2.6-1.7 1l-2.5-1a.5.5 0 0 0-.6.2l-2 3.4a.5.5 0 0 0 .1.6l2.1 1.6a7.6 7.6 0 0 0 0 2l-2.1 1.6a.5.5 0 0 0-.1.6l2 3.4c.1.3.4.4.6.2l2.5-1c.5.4 1.1.8 1.7 1l.4 2.6c0 .3.3.4.5.4h4c.2 0 .5-.1.5-.4l.4-2.6c.6-.2 1.2-.6 1.7-1l2.5 1c.2.1.5 0 .6-.2l2-3.4a.5.5 0 0 0-.1-.6L27.4 21a7.6 7.6 0 0 0 0-2z"/></svg>
+                <span id="quality-label"></span>
+              </button>
+              <div id="quality-menu" class="hidden"></div>
+            </div>
+            <button id="fullscreen" class="ctl" aria-label="Fullscreen"></button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
-  <iframe id="player" allowfullscreen="true" frameborder="0" scrolling="1"></iframe>
-  <script type="module" src="/main.js"></script>
+
+  <script src="/hls.min.js"></script>
+  <script src="/main.js"></script>
 </body>
 </html>
