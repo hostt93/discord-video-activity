@@ -30,6 +30,7 @@ const ICONS = {
 let hls = null;
 let isLive = false;
 let currentInput = null; // the raw input currently loaded (for shared-state sync)
+let stopped = false;     // true after Stop halted the hls loader; resume must restart it
 
 /* ---------------- input handling ---------------- */
 
@@ -197,17 +198,26 @@ function setPlayIcon() {
 }
 function showBigPlay() { setSpinner(false); bigPlay.classList.remove('hidden'); }
 
+function resumePlay() {
+  // Stop halts the hls loader; restart it so playback has data again instead
+  // of buffering forever.
+  if (hls && stopped) { try { hls.startLoad(); } catch (e) {} }
+  stopped = false;
+  const p = video.play();
+  if (p && p.catch) p.catch(() => {}); // ignore benign AbortError from play/pause races
+}
 function togglePlay() {
-  if (video.paused) video.play(); else video.pause();
+  if (video.paused) resumePlay(); else video.pause();
 }
 
 playBtn.onclick = togglePlay;
-bigPlay.onclick = () => { video.play(); };
+bigPlay.onclick = resumePlay;
 video.addEventListener('click', togglePlay);
 
 $('stop').onclick = () => {
+  stopped = true;
   video.pause();
-  try { video.currentTime = isLive ? video.duration || 0 : 0; } catch (e) {}
+  try { video.currentTime = isLive ? seekableEnd() : 0; } catch (e) {}
   if (hls) { try { hls.stopLoad(); } catch (e) {} }
   showBigPlay();
 };
