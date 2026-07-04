@@ -1,10 +1,20 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const { handleProxy, handleResolve } = require('./proxy');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Cache-busting build id (changes every deploy/restart). Discord's client
+// caches activity assets aggressively; without a versioned URL it can serve a
+// stale main.js against fresh index.html and crash. We stamp ?v=BUILD onto the
+// asset references in index.html so each deploy forces a fresh fetch.
+const BUILD = Date.now().toString(36);
+const INDEX_HTML = fs
+  .readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8')
+  .replace(/\/(main\.js|player\.css|hls\.min\.js)(?=["'])/g, `/$1?v=${BUILD}`);
 
 // Discord renders Activities inside an iframe on discord.com / discordsays.com.
 // Make sure we never send a header that blocks framing there.
@@ -66,7 +76,20 @@ app.post('/state', express.json({ limit: '64kb' }), (req, res) => {
 app.use('/proxy', express.raw({ type: () => true, limit: '50mb' }));
 app.all('/proxy', handleProxy);
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Always hand Discord a fresh index.html (never cached) with versioned asset
+// URLs, so a new deploy can't leave a stale script running.
+app.get(['/', '/index.html'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, must-revalidate');
+  res.type('html').send(INDEX_HTML);
+});
+
+// Other static assets carry a ?v=BUILD in their URL, so they're safe to cache;
+// no-cache forces revalidation as a belt-and-suspenders against stale content.
+app.use(
+  express.static(path.join(__dirname, 'public'), {
+    setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+  })
+);
 
 app.listen(PORT, () => {
   console.log(`Activity server listening on http://localhost:${PORT}`);
