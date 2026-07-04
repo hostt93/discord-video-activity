@@ -54,6 +54,28 @@ function proxiedUrl(absoluteUrl) {
   return `/proxy?url=${encodeURIComponent(absoluteUrl)}`;
 }
 
+// When a proxied page requests a sub-resource (CSS, JS, an HLS manifest, a
+// segment), the browser sends us a Referer of our *own* /proxy?url=<page>
+// URL — because that's the document making the request. Many hosts (e.g. S3
+// buckets with a hotlink allowlist) only serve a resource when the Referer is
+// the embedding site, not the resource's own origin. Recover the real page
+// URL from that referer so we can present it upstream, exactly like a browser
+// loading the page directly would. Returns null for top-level loads (where the
+// referer isn't one of our proxy URLs), leaving the default behavior intact.
+function originatingPageFromReferer(req) {
+  const incoming = req.headers['referer'] || req.headers['referrer'];
+  if (!incoming) return null;
+  try {
+    const inner = new URL(incoming).searchParams.get('url');
+    if (!inner) return null;
+    // Only trust http/https pages; ignore anything odd.
+    const parsed = new URL(inner);
+    return ['http:', 'https:'].includes(parsed.protocol) ? inner : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolve(maybeRelative, base) {
   try {
     return new URL(maybeRelative, base).href;
@@ -204,15 +226,27 @@ async function handleProxy(req, res) {
   }
 
   const targetOrigin = new URL(target).origin;
+
+  // Prefer the real embedding page (recovered from the incoming referer) so
+  // hotlink allowlists that require the *site's* referer — not the resource's
+  // own origin — are satisfied. Fall back to the target's own origin for
+  // top-level loads, which satisfies simpler same-origin referer checks.
+  const originatingPage = originatingPageFromReferer(req);
+  let refererValue = `${targetOrigin}/`;
+  let originValue = targetOrigin;
+  if (originatingPage) {
+    refererValue = originatingPage;
+    try {
+      originValue = new URL(originatingPage).origin;
+    } catch {}
+  }
+
   const forwardHeaders = {
     'user-agent':
       req.headers['user-agent'] ||
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-    // Many embed players hotlink-check the referer; presenting their own
-    // origin as the referer/origin is the standard way an embed proxy
-    // satisfies that check. It won't defeat stricter allow-list checks.
-    referer: `${targetOrigin}/`,
-    origin: targetOrigin,
+    referer: refererValue,
+    origin: originValue,
   };
   if (req.headers['range']) forwardHeaders['range'] = req.headers['range'];
   if (req.headers['accept']) forwardHeaders['accept'] = req.headers['accept'];
