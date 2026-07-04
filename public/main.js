@@ -180,7 +180,6 @@ function fallbackToIframe(pageUrl) {
 
 const playBtn = $('play');
 const muteBtn = $('mute');
-const fsBtn = $('fullscreen');
 const volume = $('volume');
 const seek = $('seek');
 const seekBar = $('seek-bar');
@@ -392,63 +391,10 @@ document.addEventListener('click', (e) => {
   if (!qualityWrap.contains(e.target)) qualityMenu.classList.add('hidden');
 });
 
-/* fullscreen — try the real Fullscreen API on the app container, then on the
-   video element, then native video fullscreen; only if all are blocked do we
-   fall back to a CSS fill-the-frame. Discord activity iframes normally
-   delegate the fullscreen permission, so the real API should work. */
-function inRealFs() {
-  return !!(document.fullscreenElement || document.webkitFullscreenElement || video.webkitDisplayingFullscreen);
-}
-function isFs() { return inRealFs() || app.classList.contains('pseudo-fs'); }
-function setFsIcon() { fsBtn.innerHTML = isFs() ? ICONS.exitFs : ICONS.enterFs; }
-
-function reqFsOn(el) {
-  const fn = el && (el.requestFullscreen || el.webkitRequestFullscreen ||
-    el.mozRequestFullScreen || el.msRequestFullscreen);
-  if (!fn) return Promise.reject(new Error('no requestFullscreen'));
-  try { return Promise.resolve(fn.call(el)); } catch (e) { return Promise.reject(e); }
-}
-
-function enterFullscreen() {
-  reqFsOn(app)
-    .then(setFsIcon)
-    .catch(() => reqFsOn(video).then(setFsIcon))
-    .catch(() => {
-      // Native video fullscreen — allowed on some clients even when the
-      // document Fullscreen API is policy-blocked.
-      if (video.webkitEnterFullscreen && video.readyState > 0) {
-        try { video.webkitEnterFullscreen(); setFsIcon(); return; } catch (e) {}
-      }
-      console.warn(
-        'Real fullscreen unavailable (document.fullscreenEnabled=' +
-          document.fullscreenEnabled + ') — using CSS fill-frame fallback.'
-      );
-      app.classList.add('pseudo-fs');
-      setFsIcon();
-    });
-}
-
-function exitFullscreen() {
-  if (document.fullscreenElement || document.webkitFullscreenElement) {
-    const exit = document.exitFullscreen || document.webkitExitFullscreen;
-    if (exit) exit.call(document);
-  } else if (video.webkitDisplayingFullscreen && video.webkitExitFullscreen) {
-    video.webkitExitFullscreen();
-  } else {
-    app.classList.remove('pseudo-fs');
-  }
-  setFsIcon();
-}
-
-function toggleFullscreen() {
-  if (isFs()) exitFullscreen(); else enterFullscreen();
-}
-
-fsBtn.onclick = toggleFullscreen;
-document.addEventListener('fullscreenchange', setFsIcon);
-document.addEventListener('webkitfullscreenchange', setFsIcon);
-video.addEventListener('webkitbeginfullscreen', setFsIcon);
-video.addEventListener('webkitendfullscreen', setFsIcon);
+// Fullscreen is handled by Discord's own activity toolbar control: the
+// Fullscreen API is not delegated to the activity iframe (permissions policy
+// blocks it), so we don't render our own fullscreen button. The video already
+// fills the viewport, so Discord's fullscreen shows it edge-to-edge.
 
 /* auto-hide UI */
 let hideTimer = null;
@@ -467,8 +413,6 @@ document.addEventListener('keydown', (e) => {
   if (e.target === $('url-input')) return;
   switch (e.key) {
     case ' ': case 'k': e.preventDefault(); togglePlay(); break;
-    case 'f': toggleFullscreen(); break;
-    case 'Escape': if (app.classList.contains('pseudo-fs')) { app.classList.remove('pseudo-fs'); setFsIcon(); } break;
     case 'm': muteBtn.onclick(); break;
     case 'ArrowRight': if (!isLive) video.currentTime += 5; break;
     case 'ArrowLeft': if (!isLive) video.currentTime -= 5; break;
@@ -485,7 +429,6 @@ input.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadInput(inpu
 
 setPlayIcon();
 setVolIcon();
-setFsIcon();
 
 /* ---------------- shared state (everyone sees the same load) ----------------
    Discord passes the running activity's identifiers as query params on the
