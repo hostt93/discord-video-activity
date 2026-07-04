@@ -79,14 +79,14 @@ async function loadInput(rawInput, opts) {
   try {
     if (isDirectMedia(pageUrl)) {
       const origin = new URL(pageUrl).origin + '/';
-      playMedia(pageUrl, origin);
+      playMedia(pageUrl, origin, pageUrl);
       return;
     }
     // Ask the server to dig the real stream URL out of the embed page.
     const res = await fetch(`/resolve?url=${encodeURIComponent(pageUrl)}`);
     const data = await res.json().catch(() => ({}));
     if (data && data.media) {
-      playMedia(data.media, data.ref || pageUrl);
+      playMedia(data.media, data.ref || pageUrl, pageUrl);
     } else {
       // Nothing playable found — fall back to embedding the site's own player.
       fallbackToIframe(pageUrl);
@@ -108,7 +108,7 @@ function teardown() {
   buildQualityMenu([]);
 }
 
-function playMedia(mediaUrl, ref) {
+function playMedia(mediaUrl, ref, originPage) {
   const src = proxied(mediaUrl, ref);
   const isHls = mediaUrl.split('?')[0].toLowerCase().endsWith('.m3u8');
 
@@ -116,8 +116,24 @@ function playMedia(mediaUrl, ref) {
   video.style.display = '';
   controls.classList.remove('hidden');
 
+  // If our own player can't run (e.g. Discord's sandbox blocks MSE / blob
+  // workers), fall back to embedding the site's own player in the iframe —
+  // that's the behavior that worked before the custom player existed.
+  const fallbackPage = originPage || ref || mediaUrl;
+  const bailToIframe = (why) => {
+    console.warn('Custom player failed, falling back to iframe:', why);
+    if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+    try { fallbackToIframe(fallbackPage); } catch (e) {
+      setSpinner(false);
+      showError('Could not play this stream.', 'The source may be offline or region-locked.');
+    }
+  };
+
   if (isHls && window.Hls && window.Hls.isSupported()) {
-    hls = new window.Hls({ enableWorker: true, lowLatencyMode: true });
+    // enableWorker:false avoids spawning a blob: Web Worker, which some
+    // sandboxed CSPs (like Discord's activity frame) refuse.
+    hls = new window.Hls({ enableWorker: false, lowLatencyMode: true, backBufferLength: 90 });
+    let fatalCount = 0;
     hls.loadSource(src);
     hls.attachMedia(video);
     hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
@@ -129,16 +145,16 @@ function playMedia(mediaUrl, ref) {
     hls.on(window.Hls.Events.LEVEL_LOADED, (e, data) => {
       setLive(!!(data.details && data.details.live));
     });
+    hls.on(window.Hls.Events.FRAG_BUFFERED, () => { fatalCount = 0; });
     hls.on(window.Hls.Events.LEVEL_SWITCHED, updateQualityLabel);
     hls.on(window.Hls.Events.ERROR, (evt, data) => {
-      if (data.fatal) {
-        switch (data.type) {
-          case window.Hls.ErrorTypes.NETWORK_ERROR: hls.startLoad(); break;
-          case window.Hls.ErrorTypes.MEDIA_ERROR: hls.recoverMediaError(); break;
-          default:
-            setSpinner(false);
-            showError('Could not play this stream.', 'The source may be offline or region/geo-locked.');
-        }
+      if (!data.fatal) return;
+      fatalCount++;
+      if (fatalCount > 3) { bailToIframe(data.details || data.type); return; }
+      switch (data.type) {
+        case window.Hls.ErrorTypes.NETWORK_ERROR: hls.startLoad(); break;
+        case window.Hls.ErrorTypes.MEDIA_ERROR: hls.recoverMediaError(); break;
+        default: bailToIframe(data.details || data.type);
       }
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl') || !isHls) {
@@ -147,8 +163,8 @@ function playMedia(mediaUrl, ref) {
     video.play().catch(() => showBigPlay());
     buildQualityMenu([]);
   } else {
-    setSpinner(false);
-    showError('This stream format is not supported here.');
+    // No MSE/hls support at all — use the site's own embedded player.
+    bailToIframe('hls unsupported');
   }
 }
 
