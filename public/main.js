@@ -273,6 +273,8 @@ function setLive(live) {
   isLive = live;
   liveBadge.classList.toggle('hidden', !live);
   timeEl.classList.toggle('hidden', live);
+  // No meaningful timeline for a live stream — hide the seek bar entirely.
+  seek.classList.toggle('hidden', live);
 }
 
 video.addEventListener('durationchange', () => {
@@ -303,7 +305,14 @@ video.addEventListener('progress', () => {
   buffered.style.width = Math.min(100, (end / total) * 100) + '%';
 });
 
-liveBadge.onclick = () => { try { video.currentTime = seekableEnd(); } catch (e) {} };
+// Clicking LIVE resyncs to the live edge (and restarts the loader / resumes
+// if playback was stopped or paused).
+liveBadge.onclick = () => {
+  if (hls && stopped) { try { hls.startLoad(); } catch (e) {} stopped = false; }
+  try { video.currentTime = seekableEnd(); } catch (e) {}
+  const p = video.play();
+  if (p && p.catch) p.catch(() => {});
+};
 
 function seekToClientX(clientX) {
   const rect = seekBar.getBoundingClientRect();
