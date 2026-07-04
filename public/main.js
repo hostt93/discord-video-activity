@@ -373,17 +373,37 @@ document.addEventListener('click', (e) => {
   if (!qualityWrap.contains(e.target)) qualityMenu.classList.add('hidden');
 });
 
-/* fullscreen */
-function inFullscreen() { return document.fullscreenElement || document.webkitFullscreenElement; }
-fsBtn.onclick = () => {
-  if (inFullscreen()) {
-    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-  } else {
-    const el = app;
-    (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+/* fullscreen — real Fullscreen API where allowed, CSS fill-viewport fallback
+   inside Discord's activity iframe (which blocks fullscreen via permissions
+   policy). */
+function inRealFs() { return document.fullscreenElement || document.webkitFullscreenElement; }
+function isFs() { return inRealFs() || app.classList.contains('pseudo-fs'); }
+function setFsIcon() { fsBtn.innerHTML = isFs() ? ICONS.exitFs : ICONS.enterFs; }
+
+function toggleFullscreen() {
+  if (inRealFs()) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit) exit.call(document);
+    return;
   }
-};
-function setFsIcon() { fsBtn.innerHTML = inFullscreen() ? ICONS.exitFs : ICONS.enterFs; }
+  if (app.classList.contains('pseudo-fs')) {
+    app.classList.remove('pseudo-fs');
+    setFsIcon();
+    return;
+  }
+  const el = app;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  let attempt;
+  try { attempt = req ? req.call(el) : Promise.reject(new Error('no fullscreen api')); }
+  catch (e) { attempt = Promise.reject(e); }
+  Promise.resolve(attempt).then(setFsIcon).catch(() => {
+    // Blocked (e.g. Discord permissions policy) — maximise within the iframe.
+    app.classList.add('pseudo-fs');
+    setFsIcon();
+  });
+}
+
+fsBtn.onclick = toggleFullscreen;
 document.addEventListener('fullscreenchange', setFsIcon);
 document.addEventListener('webkitfullscreenchange', setFsIcon);
 
@@ -404,7 +424,8 @@ document.addEventListener('keydown', (e) => {
   if (e.target === $('url-input')) return;
   switch (e.key) {
     case ' ': case 'k': e.preventDefault(); togglePlay(); break;
-    case 'f': fsBtn.onclick(); break;
+    case 'f': toggleFullscreen(); break;
+    case 'Escape': if (app.classList.contains('pseudo-fs')) { app.classList.remove('pseudo-fs'); setFsIcon(); } break;
     case 'm': muteBtn.onclick(); break;
     case 'ArrowRight': if (!isLive) video.currentTime += 5; break;
     case 'ArrowLeft': if (!isLive) video.currentTime -= 5; break;

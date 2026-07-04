@@ -286,6 +286,15 @@ html, body {
 .q-item .check { width: 14px; color: var(--yt-red); font-weight: 700; }
 .q-item.active { font-weight: 600; }
 
+/* CSS fallback fullscreen (used when the real Fullscreen API is blocked,
+   e.g. inside Discord's activity iframe). Fills the whole iframe viewport. */
+#app.pseudo-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  background: #000;
+}
+
 .hidden { display: none !important; }
 
 @media (max-width: 480px) {
