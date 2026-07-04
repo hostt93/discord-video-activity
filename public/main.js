@@ -29,6 +29,7 @@ const ICONS = {
 
 let hls = null;
 let isLive = false;
+let currentInput = null; // the raw input currently loaded (for shared-state sync)
 
 /* ---------------- input handling ---------------- */
 
@@ -62,10 +63,14 @@ function showError(headline, detail) {
 function clearError() { errorMsg.classList.add('hidden'); }
 function setSpinner(on) { spinner.classList.toggle('hidden', !on); }
 
-async function loadInput(rawInput) {
+async function loadInput(rawInput, opts) {
+  const broadcast = !opts || opts.broadcast !== false;
   const pageUrl = toAbsolute(extractUrl(rawInput));
   if (!pageUrl) return;
+  currentInput = rawInput;
   localStorage.setItem('lastEmbedUrl', rawInput);
+  // Tell the server so everyone else in this activity loads the same thing.
+  if (broadcast) broadcastState(rawInput);
 
   clearError();
   setSpinner(true);
@@ -402,8 +407,45 @@ setPlayIcon();
 setVolIcon();
 setFsIcon();
 
-const last = localStorage.getItem('lastEmbedUrl');
-if (last) { input.value = last; loadInput(last); }
+/* ---------------- shared state (everyone sees the same load) ----------------
+   Discord passes the running activity's identifiers as query params on the
+   iframe URL. Key the shared state by instance_id so each voice channel's
+   activity is independent; fall back to channel/frame or a local key. */
+const qp = new URLSearchParams(location.search);
+const INSTANCE =
+  qp.get('instance_id') || qp.get('channel_id') || qp.get('frame_id') || 'local';
+
+async function broadcastState(rawInput) {
+  try {
+    await fetch(`/state?instance=${encodeURIComponent(INSTANCE)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input: rawInput }),
+    });
+  } catch (e) {}
+}
+
+async function pollState() {
+  try {
+    const res = await fetch(`/state?instance=${encodeURIComponent(INSTANCE)}`);
+    const data = await res.json();
+    if (data && data.input && data.input !== currentInput) {
+      input.value = data.input;
+      loadInput(data.input, { broadcast: false }); // remote-driven: don't echo back
+    }
+  } catch (e) {}
+}
+
+// On join: adopt whatever's already playing in this activity; if nothing is
+// set yet but this client has a last-used link, seed it for everyone.
+(async () => {
+  await pollState();
+  if (!currentInput) {
+    const last = localStorage.getItem('lastEmbedUrl');
+    if (last) { input.value = last; loadInput(last); }
+  }
+})();
+setInterval(pollState, 3000);
 
 /* Optional: initialise the Discord Activity SDK if a client id is configured.
    Not required for playback; failures are non-fatal. */

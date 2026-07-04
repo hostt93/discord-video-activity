@@ -40,7 +40,7 @@ html, body {
   transform: translateY(-100%);
   pointer-events: none;
 }
-#yt-logo { display: flex; align-items: center; flex: 0 0 auto; }
+#brand { display: flex; align-items: center; flex: 0 0 auto; }
 #url-input {
   flex: 1;
   min-width: 0;
